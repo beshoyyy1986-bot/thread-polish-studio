@@ -9,16 +9,15 @@ import type { CdpConnection as Cdp } from "@/lib/cdp.server";
 
 type Ctx = { supabase: SupabaseClient<Database>; userId: string };
 
-/** Cloud browser credits belong to one owner: the first account that signs in claims the tool. */
-async function assertOwner({ supabase, userId }: Ctx) {
-  const { data } = await supabase.from("app_owner").select("user_id").maybeSingle();
-  if (data) {
-    if (data.user_id !== userId) throw new Error("هذا الحساب غير مصرح له باستخدام الأداة");
-    return;
+const OWNER_EMAIL = "beshoyyy1986@gmail.com";
+
+async function assertOwner({ supabase }: Ctx) {
+  const { data, error } = await supabase.auth.getUser();
+  const email = data.user?.email?.trim().toLowerCase();
+
+  if (error || !data.user?.email_confirmed_at || email !== OWNER_EMAIL) {
+    throw new Error("هذا الحساب غير مصرح له باستخدام الأداة");
   }
-  await supabase.from("app_owner").insert({ user_id: userId });
-  const { data: again } = await supabase.from("app_owner").select("user_id").maybeSingle();
-  if (again?.user_id !== userId) throw new Error("هذا الحساب غير مصرح له باستخدام الأداة");
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

@@ -15,7 +15,14 @@ import { parseCustomerFile } from "@/lib/customer";
 import { parseCookies } from "@/lib/cookies";
 import { SAVED_REPLY_MARKER } from "@/lib/bot-script";
 import { fetchQueue, sessionsQuery, statsQuery, upsertCustomers } from "@/lib/fb-store";
-import { closeSession, openSession, reattachSession, sendToCustomer, startRemoteView, syncSessions } from "@/lib/fb.functions";
+import {
+  closeSession,
+  openSession,
+  reattachSession,
+  sendToCustomer,
+  startRemoteView,
+  syncSessions,
+} from "@/lib/fb.functions";
 import { Panel, Stat } from "./Panel";
 import { ActivityLog } from "./ActivityLog";
 import type { LogEntry, Logger } from "./use-log";
@@ -27,7 +34,10 @@ type Session = Tables<"cloud_sessions">;
 const fmt = (n: number) => n.toLocaleString("en-US");
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-const statusLabel: Record<string, { text: string; variant: "success" | "warning" | "danger" | "muted" }> = {
+const statusLabel: Record<
+  string,
+  { text: string; variant: "success" | "warning" | "danger" | "muted" }
+> = {
   open: { text: "متصلة", variant: "success" },
   opening: { text: "جاري التجهيز", variant: "warning" },
   lost: { text: "غير متصلة", variant: "warning" },
@@ -70,6 +80,7 @@ export function SendPanel(props: {
   const [current, setCurrent] = useState<Record<string, string>>({});
   const [remoteViews, setRemoteViews] = useState<Record<string, string>>({});
   const [viewLoading, setViewLoading] = useState<string | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
   const stopRef = useRef(false);
 
   const refresh = () => {
@@ -81,7 +92,8 @@ export function SendPanel(props: {
   useEffect(() => {
     syncFn()
       .then((r) => {
-        if (r.adopted) log(`🔎 وُجدت ${r.adopted} جلسة مفتوحة على حسابك لم تكن مسجلة — ظاهرة بالأسفل`, "warn");
+        if (r.adopted)
+          log(`🔎 وُجدت ${r.adopted} جلسة مفتوحة على حسابك لم تكن مسجلة — ظاهرة بالأسفل`, "warn");
         qc.invalidateQueries({ queryKey: ["sessions"] });
       })
       .catch((e) => log("⚠️ " + errText(e), "warn"));
@@ -91,7 +103,10 @@ export function SendPanel(props: {
   useEffect(() => () => void (stopRef.current = true), []);
 
   async function saveSettings() {
-    const { error } = await supabase.from("fb_profiles").update({ cookies, fb_url: fbUrl.trim() || "https://www.facebook.com/messages" }).eq("id", profile.id);
+    const { error } = await supabase
+      .from("fb_profiles")
+      .update({ cookies, fb_url: fbUrl.trim() || "https://www.facebook.com/messages" })
+      .eq("id", profile.id);
     if (error) throw error;
     qc.invalidateQueries({ queryKey: ["profiles"] });
   }
@@ -106,7 +121,10 @@ export function SendPanel(props: {
       await upsertCustomers(props.userId, profile.id, pageId, parsed.customers);
       log(`📂 تم استيراد ${fmt(parsed.customers.length)} عميل من ${file.name}`, "ok");
       if (parsed.missingConversationId) {
-        log(`⚠️ ${fmt(parsed.missingConversationId)} صف بدون معرف محادثة (ملف قديم) — تم تجاهلهم. أعد الاستخراج للحصول عليهم.`, "warn");
+        log(
+          `⚠️ ${fmt(parsed.missingConversationId)} صف بدون معرف محادثة (ملف قديم) — تم تجاهلهم. أعد الاستخراج للحصول عليهم.`,
+          "warn",
+        );
       }
       refresh();
     } catch (e) {
@@ -116,7 +134,8 @@ export function SendPanel(props: {
 
   async function sleepInterruptible(ms: number) {
     const start = Date.now();
-    while (Date.now() - start < ms && !stopRef.current) await new Promise((r) => setTimeout(r, 400));
+    while (Date.now() - start < ms && !stopRef.current)
+      await new Promise((r) => setTimeout(r, 400));
   }
 
   async function start() {
@@ -131,7 +150,11 @@ export function SendPanel(props: {
       return;
     }
     await saveSettings();
-    const queue = await fetchQueue(profile.id, pageId, retryFailed ? ["pending", "failed"] : ["pending"]);
+    const queue = await fetchQueue(
+      profile.id,
+      pageId,
+      retryFailed ? ["pending", "failed"] : ["pending"],
+    );
     if (!queue.length) {
       toast.info("لا يوجد عملاء في الانتظار لهذه الصفحة");
       return;
@@ -143,7 +166,9 @@ export function SendPanel(props: {
     log(`🚀 إرسال لـ ${fmt(queue.length)} عميل عبر ${parallel} جلسة`, "ok");
 
     // Reuse sessions that are already connected (this is what makes resume after refresh work).
-    const usable: Session[] = sessions.filter((s) => s.status === "open" && (s.profile_id === profile.id || !s.profile_id)).slice(0, parallel);
+    const usable: Session[] = sessions
+      .filter((s) => s.status === "open" && (s.profile_id === profile.id || !s.profile_id))
+      .slice(0, parallel);
     if (usable.length) log(`♻️ استخدام ${usable.length} جلسة مفتوحة بالفعل`, "info");
     while (usable.length < parallel && !stopRef.current) {
       log(`🖥️ فتح متصفح سحابي جديد...`, "info");
@@ -200,19 +225,37 @@ export function SendPanel(props: {
     await Promise.all(usable.map(worker));
     setRunning(false);
     refresh();
-    log(stopRef.current ? "⏸️ تم الإيقاف — اضغط استكمال للمتابعة من نفس النقطة" : "📊 انتهت قائمة الانتظار", stopRef.current ? "warn" : "ok");
+    log(
+      stopRef.current
+        ? "⏸️ تم الإيقاف — اضغط استكمال للمتابعة من نفس النقطة"
+        : "📊 انتهت قائمة الانتظار",
+      stopRef.current ? "warn" : "ok",
+    );
   }
 
   async function resetUncertain() {
     if (!pageId) return;
-    if (!confirm("هذه المحادثات انقطع الإرسال لها في المنتصف وقد تكون الرسالة وصلت. إعادتها للانتظار قد يكرر الرسالة. متابعة؟")) return;
-    await supabase.from("customers").update({ send_status: "pending" }).eq("profile_id", profile.id).eq("page_id", pageId).eq("send_status", "in_progress");
+    if (
+      !confirm(
+        "هذه المحادثات انقطع الإرسال لها في المنتصف وقد تكون الرسالة وصلت. إعادتها للانتظار قد يكرر الرسالة. متابعة؟",
+      )
+    )
+      return;
+    await supabase
+      .from("customers")
+      .update({ send_status: "pending" })
+      .eq("profile_id", profile.id)
+      .eq("page_id", pageId)
+      .eq("send_status", "in_progress");
     refresh();
   }
 
   async function close(s: Session) {
     if (!confirm("إغلاق هذا المتصفح السحابي نهائياً؟")) return;
-    const r = await closeFn({ data: { sessionId: s.id } }).catch((e) => ({ closed: false, detail: errText(e) }));
+    const r = await closeFn({ data: { sessionId: s.id } }).catch((e) => ({
+      closed: false,
+      detail: errText(e),
+    }));
     if (r.closed) log("🗑 تم إغلاق الجلسة والتأكد من إغلاقها", "ok");
     else log("❌ لم يتم التأكد من الإغلاق: " + r.detail, "err");
     refresh();
@@ -222,7 +265,10 @@ export function SendPanel(props: {
     if (!confirm("إيقاف الإرسال وإغلاق كل المتصفحات السحابية؟")) return;
     stopRef.current = true;
     for (const s of sessions) {
-      const r = await closeFn({ data: { sessionId: s.id } }).catch((e) => ({ closed: false, detail: errText(e) }));
+      const r = await closeFn({ data: { sessionId: s.id } }).catch((e) => ({
+        closed: false,
+        detail: errText(e),
+      }));
       log(r.closed ? `🗑 أُغلقت ${s.label}` : `❌ ${s.label}: ${r.detail}`, r.closed ? "ok" : "err");
     }
     refresh();
@@ -240,6 +286,10 @@ export function SendPanel(props: {
 
   async function view(s: Session, separateTab = false) {
     const w = separateTab ? window.open("about:blank", "_blank") : null;
+    if (separateTab && !w) {
+      toast.error("اسمح بالنوافذ المنبثقة لهذا الموقع ثم حاول مرة أخرى");
+      return;
+    }
     if (w) w.opener = null;
     setViewLoading(s.id);
     try {
@@ -270,13 +320,22 @@ export function SendPanel(props: {
             value={pageId ?? ""}
             onChange={(e) => props.onSelectPage(e.target.value)}
           >
-            <option value="" disabled>اختر صفحة</option>
+            <option value="" disabled>
+              اختر صفحة
+            </option>
             {pages.map((p) => (
-              <option key={p.page_id} value={p.page_id}>{p.name}</option>
+              <option key={p.page_id} value={p.page_id}>
+                {p.name}
+              </option>
             ))}
           </select>
           <label className="mt-3 flex cursor-pointer flex-col items-center gap-1 rounded-lg border-2 border-dashed border-border p-3 text-center text-xs text-muted-foreground hover:border-primary hover:text-primary">
-            <input type="file" accept=".json,.csv" className="hidden" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+            <input
+              type="file"
+              accept=".json,.csv"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+            />
             استيراد ملف عملاء (JSON/CSV) لهذه الصفحة
             <span className="opacity-70">العملاء المستخرجين محفوظين تلقائياً — الملف اختياري</span>
           </label>
@@ -286,11 +345,23 @@ export function SendPanel(props: {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label className="text-xs">الكوكيز (JSON أو c_user=..; xs=..)</Label>
-              <Textarea dir="ltr" rows={3} className="font-mono text-[11px]" value={cookies} onChange={(e) => setCookies(e.target.value)} onBlur={() => saveSettings().catch(() => {})} />
+              <Textarea
+                dir="ltr"
+                rows={3}
+                className="font-mono text-[11px]"
+                value={cookies}
+                onChange={(e) => setCookies(e.target.value)}
+                onBlur={() => saveSettings().catch(() => {})}
+              />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">رابط صندوق الرسائل</Label>
-              <Input dir="ltr" value={fbUrl} onChange={(e) => setFbUrl(e.target.value)} onBlur={() => saveSettings().catch(() => {})} />
+              <Input
+                dir="ltr"
+                value={fbUrl}
+                onChange={(e) => setFbUrl(e.target.value)}
+                onBlur={() => saveSettings().catch(() => {})}
+              />
             </div>
           </div>
         </Panel>
@@ -298,8 +369,18 @@ export function SendPanel(props: {
         <Panel title="الإعدادات">
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label className="text-xs">الجلسات المتوازية: <b>{parallel}</b></Label>
-              <Slider dir="rtl" min={1} max={5} step={1} value={[parallel]} onValueChange={(v) => setParallel(v[0] ?? 1)} disabled={running} />
+              <Label className="text-xs">
+                الجلسات المتوازية: <b>{parallel}</b>
+              </Label>
+              <Slider
+                dir="rtl"
+                min={1}
+                max={5}
+                step={1}
+                value={[parallel]}
+                onValueChange={(v) => setParallel(v[0] ?? 1)}
+                disabled={running}
+              />
             </div>
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs">التحقق من اسم العميل قبل الإرسال</Label>
@@ -310,19 +391,32 @@ export function SendPanel(props: {
               <Switch checked={retryFailed} onCheckedChange={setRetryFailed} />
             </div>
             <p className="text-[11px] leading-5 text-muted-foreground">
-              يتم إرسال الرد المحفوظ المسمى <b className="text-foreground">{SAVED_REPLY_MARKER}</b> فقط. لو مش موجود، المحادثة تتسجل فشل ومفيش حاجة تتبعت.
+              يتم إرسال الرد المحفوظ المسمى <b className="text-foreground">{SAVED_REPLY_MARKER}</b>{" "}
+              فقط. لو مش موجود، المحادثة تتسجل فشل ومفيش حاجة تتبعت.
             </p>
           </div>
         </Panel>
 
         {running ? (
-          <Button variant="soft-destructive" onClick={() => (stopRef.current = true)}>⏸️ إيقاف الإرسال</Button>
+          <Button variant="soft-destructive" onClick={() => (stopRef.current = true)}>
+            ⏸️ إيقاف الإرسال
+          </Button>
         ) : (
-          <Button onClick={() => start().catch((e) => { setRunning(false); toast.error(errText(e)); })} disabled={!pageId}>
+          <Button
+            onClick={() =>
+              start().catch((e) => {
+                setRunning(false);
+                toast.error(errText(e));
+              })
+            }
+            disabled={!pageId}
+          >
             🚀 {stats && stats.sent + stats.failed > 0 ? "استكمال الإرسال" : "بدء الإرسال"}
           </Button>
         )}
-        <Button variant="soft-destructive" onClick={closeAll} disabled={!sessions.length}>⏹ إيقاف الكل وإغلاق الجلسات</Button>
+        <Button variant="soft-destructive" onClick={closeAll} disabled={!sessions.length}>
+          ⏹ إيقاف الكل وإغلاق الجلسات
+        </Button>
       </aside>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -338,17 +432,33 @@ export function SendPanel(props: {
             </span>
           )}
           {!running && (stats?.in_progress ?? 0) > 0 && (
-            <Button size="sm" variant="soft" className="ms-auto" onClick={resetUncertain}>إعادة غير المؤكد للانتظار</Button>
+            <Button size="sm" variant="soft" className="ms-auto" onClick={resetUncertain}>
+              إعادة غير المؤكد للانتظار
+            </Button>
           )}
         </div>
 
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <span className="text-xs font-semibold text-muted-foreground">المتصفحات السحابية ({sessions.length})</span>
-          <Button size="sm" variant="ghost" onClick={() => syncFn().then(refresh).catch((e) => toast.error(errText(e)))}>🔄 مزامنة مع حسابي</Button>
+          <span className="text-xs font-semibold text-muted-foreground">
+            المتصفحات السحابية ({sessions.length})
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              syncFn()
+                .then(refresh)
+                .catch((e) => toast.error(errText(e)))
+            }
+          >
+            🔄 مزامنة مع حسابي
+          </Button>
         </div>
         <div className="grid min-h-[120px] flex-1 auto-rows-min gap-3 overflow-y-auto p-3 md:grid-cols-2">
           {sessions.length === 0 && (
-            <div className="col-span-full flex h-24 items-center justify-center text-sm text-muted-foreground">لا توجد متصفحات مفتوحة</div>
+            <div className="col-span-full flex h-24 items-center justify-center text-sm text-muted-foreground">
+              لا توجد متصفحات مفتوحة
+            </div>
           )}
           {sessions.map((s) => {
             const st = statusLabel[s.status] ?? { text: s.status, variant: "muted" as const };
@@ -356,13 +466,21 @@ export function SendPanel(props: {
               <div key={s.id} className="rounded-lg border border-border bg-secondary/50 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium" dir="ltr">{s.label}</div>
-                    <div className="text-[11px] text-muted-foreground">{new Date(s.created_at).toLocaleString("en-US")}</div>
+                    <div className="truncate text-sm font-medium" dir="ltr">
+                      {s.label}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {new Date(s.created_at).toLocaleString("en-US")}
+                    </div>
                   </div>
                   <Badge variant={st.variant}>{st.text}</Badge>
                 </div>
-                {current[s.id] && <div className="mt-2 truncate text-xs text-primary">▶ {current[s.id]}</div>}
-                {s.last_error && <div className="mt-2 text-[11px] text-warning">{s.last_error}</div>}
+                {current[s.id] && (
+                  <div className="mt-2 truncate text-xs text-primary">▶ {current[s.id]}</div>
+                )}
+                {s.last_error && (
+                  <div className="mt-2 text-[11px] text-warning">{s.last_error}</div>
+                )}
                 {remoteViews[s.id] && (
                   <div className="mt-3 overflow-hidden rounded-md border border-border bg-background">
                     <iframe
@@ -374,20 +492,59 @@ export function SendPanel(props: {
                   </div>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" variant="soft" disabled={viewLoading === s.id} onClick={() => remoteViews[s.id] ? hideView(s.id) : view(s)}>
-                    {viewLoading === s.id ? "جاري التشغيل..." : remoteViews[s.id] ? "إخفاء العرض" : "🖥️ عرض هنا"}
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    disabled={viewLoading === s.id}
+                    onClick={() => (remoteViews[s.id] ? hideView(s.id) : view(s))}
+                  >
+                    {viewLoading === s.id
+                      ? "جاري التشغيل..."
+                      : remoteViews[s.id]
+                        ? "إخفاء العرض"
+                        : "🖥️ عرض هنا"}
                   </Button>
-                  <Button size="sm" variant="soft" disabled={viewLoading === s.id} onClick={() => view(s, true)}>↗ تكبير في تاب</Button>
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    disabled={viewLoading === s.id}
+                    onClick={() => view(s, true)}
+                  >
+                    ↗ تكبير في تاب
+                  </Button>
                   {s.status !== "open" && s.status !== "close_failed" && (
-                    <Button size="sm" variant="soft" onClick={() => reattach(s)}>🔗 اتصال</Button>
+                    <Button size="sm" variant="soft" onClick={() => reattach(s)}>
+                      🔗 اتصال
+                    </Button>
                   )}
-                  <Button size="sm" variant="soft-destructive" onClick={() => close(s)}>إغلاق</Button>
+                  <Button size="sm" variant="soft-destructive" onClick={() => close(s)}>
+                    إغلاق
+                  </Button>
                 </div>
               </div>
             );
           })}
         </div>
-        <ActivityLog entries={props.entries} className="h-44 shrink-0 border-t border-border" />
+        <div className="shrink-0 border-t border-border">
+          <button
+            type="button"
+            className="flex h-9 w-full items-center justify-between gap-3 px-3 text-start text-xs text-muted-foreground hover:bg-secondary/50"
+            aria-expanded={logOpen}
+            onClick={() => setLogOpen((open) => !open)}
+          >
+            <span className="shrink-0 font-medium">سجل العمليات ({props.entries.length})</span>
+            <span className="truncate">
+              {props.entries.at(-1)?.text ?? "جاهز — اضغط لعرض التفاصيل"}
+            </span>
+            <span aria-hidden="true">{logOpen ? "−" : "+"}</span>
+          </button>
+          {logOpen && (
+            <ActivityLog
+              entries={props.entries}
+              className="h-32 border-t border-border px-3 py-1 text-[10px] leading-4"
+            />
+          )}
+        </div>
       </div>
     </div>
   );

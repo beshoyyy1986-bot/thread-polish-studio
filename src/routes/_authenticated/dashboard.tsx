@@ -6,28 +6,43 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getPages, type FbPage } from "@/lib/facebook";
+import { countConversations, getPages, type FbPage } from "@/lib/facebook";
 import { pagesQuery, profilesQuery } from "@/lib/fb-store";
 import { whoOwns } from "@/lib/fb.functions";
 import { PagesPanel } from "@/components/fb/PagesPanel";
 import { SendPanel } from "@/components/fb/SendPanel";
 import { useLog } from "@/components/fb/use-log";
 
-type Search = { tab?: "pages" | "send" | undefined; p?: string | undefined; pg?: string | undefined };
+type Search = {
+  tab?: "pages" | "send" | undefined;
+  p?: string | undefined;
+  pg?: string | undefined;
+};
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   validateSearch: (s: Record<string, unknown>): Search => ({
     tab: s["tab"] === "send" ? "send" : s["tab"] === "pages" ? "pages" : undefined,
     p: typeof s["p"] === "string" ? s["p"] : undefined,
     // Page ids look numeric, so a hand-typed URL may arrive parsed as a number.
-    pg: typeof s["pg"] === "string" ? s["pg"] : typeof s["pg"] === "number" ? String(s["pg"]) : undefined,
+    pg:
+      typeof s["pg"] === "string"
+        ? s["pg"]
+        : typeof s["pg"] === "number"
+          ? String(s["pg"])
+          : undefined,
   }),
   head: () => ({
     meta: [
       { title: "لوحة التحكم — FBBlaster Pro" },
-      { name: "description", content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال." },
+      {
+        name: "description",
+        content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال.",
+      },
       { property: "og:title", content: "لوحة التحكم — FBBlaster Pro" },
-      { property: "og:description", content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال." },
+      {
+        property: "og:description",
+        content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -45,7 +60,9 @@ function Dashboard() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
 
   useEffect(() => {
-    ownerFn().then((r) => setAllowed(r.allowed)).catch(() => setAllowed(false));
+    ownerFn()
+      .then((r) => setAllowed(r.allowed))
+      .catch(() => setAllowed(false));
   }, [ownerFn]);
 
   const { data: profiles } = useQuery(profilesQuery());
@@ -53,7 +70,10 @@ function Dashboard() {
   useEffect(() => {
     if (profiles && profiles.length === 0 && !creating.current) {
       creating.current = true;
-      supabase.from("fb_profiles").insert({ user_id: user.id, name: "الرئيسي" }).then(() => qc.invalidateQueries({ queryKey: ["profiles"] }));
+      supabase
+        .from("fb_profiles")
+        .insert({ user_id: user.id, name: "الرئيسي" })
+        .then(() => qc.invalidateQueries({ queryKey: ["profiles"] }));
     }
   }, [profiles, user.id, qc]);
 
@@ -61,12 +81,15 @@ function Dashboard() {
   const tab = search.tab ?? "pages";
   const { data: pages = [] } = useQuery(pagesQuery(profile?.id));
 
-  const setSearch = (patch: Partial<Search>) => navigate({ search: (s) => ({ ...s, ...patch }), replace: true });
+  const setSearch = (patch: Partial<Search>) =>
+    navigate({ search: (s) => ({ ...s, ...patch }), replace: true });
 
   // Page access tokens come from the saved user token and are only kept in memory.
   const [tokens, setTokens] = useState<Map<string, FbPage>>(new Map());
   const [tokensLoading, setTokensLoading] = useState(false);
   const [tokensError, setTokensError] = useState<string | null>(null);
+  const [countingAll, setCountingAll] = useState(false);
+  const [countProgress, setCountProgress] = useState("");
 
   const loadPages = useCallback(
     async (token: string, profileId: string) => {
@@ -77,7 +100,14 @@ function Dashboard() {
         setTokens(new Map(list.map((p) => [p.id, p])));
         if (list.length) {
           const { error } = await supabase.from("fb_pages").upsert(
-            list.map((p) => ({ profile_id: profileId, page_id: p.id, user_id: user.id, name: p.name, fan_count: p.fan_count ?? 0, updated_at: new Date().toISOString() })),
+            list.map((p) => ({
+              profile_id: profileId,
+              page_id: p.id,
+              user_id: user.id,
+              name: p.name,
+              fan_count: p.fan_count ?? 0,
+              updated_at: new Date().toISOString(),
+            })),
             { onConflict: "profile_id,page_id" },
           );
           if (error) throw error;
@@ -109,10 +139,69 @@ function Dashboard() {
     await loadPages(token, profile.id);
   }
 
+  async function countAllConversations() {
+    if (!profile || countingAll) return;
+    const availablePages = pages.filter((page) => tokens.has(page.page_id));
+    if (!availablePages.length) {
+      toast.error("احفظ توكن فيسبوك صالحًا وجلب الصفحات أولًا");
+      return;
+    }
+    setCountingAll(true);
+    try {
+      for (const [index, row] of availablePages.entries()) {
+        const page = tokens.get(row.page_id);
+        if (!page) continue;
+        setCountProgress(`${index + 1}/${availablePages.length} — ${row.name}`);
+        try {
+          const result = await countConversations(
+            page,
+            async (count) => {
+              const { error } = await supabase
+                .from("fb_pages")
+                .update({
+                  conversation_count: count,
+                  count_complete: false,
+                  counted_at: new Date().toISOString(),
+                })
+                .eq("profile_id", profile.id)
+                .eq("page_id", row.page_id);
+              if (error) throw error;
+            },
+            () => false,
+          );
+          const { error } = await supabase
+            .from("fb_pages")
+            .update({
+              conversation_count: result.count,
+              count_complete: result.complete,
+              counted_at: new Date().toISOString(),
+            })
+            .eq("profile_id", profile.id)
+            .eq("page_id", row.page_id);
+          if (error) throw error;
+          log(`💬 ${row.name}: ${result.count.toLocaleString("en-US")} محادثة`, "ok");
+        } catch (error) {
+          log(
+            `⚠️ تعذر عدّ محادثات ${row.name}: ${error instanceof Error ? error.message : String(error)}`,
+            "warn",
+          );
+        }
+        await qc.invalidateQueries({ queryKey: ["pages", profile.id] });
+      }
+    } finally {
+      setCountingAll(false);
+      setCountProgress("");
+    }
+  }
+
   async function addProfile() {
     const name = prompt("اسم البروفايل الجديد");
     if (!name?.trim()) return;
-    const { data } = await supabase.from("fb_profiles").insert({ user_id: user.id, name: name.trim() }).select().single();
+    const { data } = await supabase
+      .from("fb_profiles")
+      .insert({ user_id: user.id, name: name.trim() })
+      .select()
+      .single();
     await qc.invalidateQueries({ queryKey: ["profiles"] });
     if (data) setSearch({ p: data.id, pg: undefined });
   }
@@ -138,8 +227,12 @@ function Dashboard() {
   if (allowed === false) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
-        <p className="max-w-md text-muted-foreground">هذا الحساب غير مصرح له باستخدام الأداة. الأداة مخصصة لحساب المالك فقط.</p>
-        <Button variant="soft" onClick={signOut}>تسجيل الخروج</Button>
+        <p className="max-w-md text-muted-foreground">
+          هذا الحساب غير مصرح له باستخدام الأداة. الأداة مخصصة لحساب المالك فقط.
+        </p>
+        <Button variant="soft" onClick={signOut}>
+          تسجيل الخروج
+        </Button>
       </div>
     );
   }
@@ -148,19 +241,36 @@ function Dashboard() {
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-sidebar px-5 py-2.5">
         <div className="text-lg font-bold tracking-tight">
-          <span className="text-brand">FB</span>Blaster <span className="text-xs text-muted-foreground">Pro</span>
+          <span className="text-brand">FB</span>Blaster{" "}
+          <span className="text-xs text-muted-foreground">Pro</span>
         </div>
-        <nav className="flex gap-1 rounded-lg bg-secondary p-1">
-          {(["pages", "send"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setSearch({ tab: t })}
-              className={cn("rounded-md px-4 py-1.5 text-sm transition", tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
-            >
-              {t === "pages" ? "📊 الصفحات والعملاء" : "🚀 الإرسال"}
-            </button>
-          ))}
-        </nav>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <nav className="flex gap-1 rounded-lg bg-secondary p-1" aria-label="التنقل الرئيسي">
+            {(["pages", "send"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setSearch({ tab: t })}
+                aria-current={tab === t ? "page" : undefined}
+                className={cn(
+                  "rounded-md px-4 py-1.5 text-sm transition",
+                  tab === t
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t === "pages" ? "📊 الصفحات والعملاء" : "🚀 الإرسال"}
+              </button>
+            ))}
+          </nav>
+          <Button
+            size="sm"
+            variant="soft"
+            onClick={() => void countAllConversations()}
+            disabled={countingAll || !pages.length}
+          >
+            {countingAll ? `⏳ ${countProgress || "جاري العد"}` : "🔄 تحديث عدد المحادثات"}
+          </Button>
+        </div>
         <div className="flex items-center gap-2">
           <select
             className="h-8 rounded-md border border-input bg-background px-2 text-sm"
@@ -168,18 +278,33 @@ function Dashboard() {
             onChange={(e) => setSearch({ p: e.target.value, pg: undefined })}
           >
             {profiles?.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
             ))}
           </select>
-          <Button size="sm" variant="soft" onClick={addProfile}>+ بروفايل</Button>
-          <Button size="sm" variant="soft-destructive" onClick={deleteProfile} aria-label="حذف البروفايل">✕</Button>
-          <Button size="sm" variant="ghost" onClick={signOut}>خروج</Button>
+          <Button size="sm" variant="soft" onClick={addProfile}>
+            + بروفايل
+          </Button>
+          <Button
+            size="sm"
+            variant="soft-destructive"
+            onClick={deleteProfile}
+            aria-label="حذف البروفايل"
+          >
+            ✕
+          </Button>
+          <Button size="sm" variant="ghost" onClick={signOut}>
+            خروج
+          </Button>
         </div>
       </header>
 
       <main className="min-h-0 flex-1 overflow-hidden p-4">
         {!profile ? (
-          <div className="flex h-full items-center justify-center text-muted-foreground">جاري التحميل...</div>
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            جاري التحميل...
+          </div>
         ) : tab === "pages" ? (
           <div className="h-full min-h-0">
             <PagesPanel

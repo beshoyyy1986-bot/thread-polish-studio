@@ -6,12 +6,11 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getOldestPostDate, getPages, type FbPage } from "@/lib/facebook";
+import { getPages, type FbPage } from "@/lib/facebook";
 import { pagesQuery, profilesQuery } from "@/lib/fb-store";
 import { whoOwns } from "@/lib/fb.functions";
 import { PagesPanel } from "@/components/fb/PagesPanel";
 import { SendPanel } from "@/components/fb/SendPanel";
-import { ActivityLog } from "@/components/fb/ActivityLog";
 import { useLog } from "@/components/fb/use-log";
 
 type Search = { tab?: "pages" | "send" | undefined; p?: string | undefined; pg?: string | undefined };
@@ -29,6 +28,8 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
       { name: "description", content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال." },
       { property: "og:title", content: "لوحة التحكم — FBBlaster Pro" },
       { property: "og:description", content: "صفحاتك، عدد المحادثات الفعلية، استخراج العملاء والإرسال مع الاستكمال." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Dashboard,
@@ -83,17 +84,6 @@ function Dashboard() {
         }
         qc.invalidateQueries({ queryKey: ["pages", profileId] });
         log(`✅ تم جلب ${list.length} صفحة`, "ok");
-        // oldest-post estimate, filled once per page
-        const { data: rows } = await supabase.from("fb_pages").select("page_id,oldest_post_at").eq("profile_id", profileId);
-        for (const p of list) {
-          if (rows?.find((r) => r.page_id === p.id)?.oldest_post_at) continue;
-          void (async () => {
-            const r = await getOldestPostDate(p);
-            if (!r.date) return;
-            await supabase.from("fb_pages").update({ oldest_post_at: r.date }).eq("profile_id", profileId).eq("page_id", p.id);
-            qc.invalidateQueries({ queryKey: ["pages", profileId] });
-          })().catch(() => {});
-        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setTokensError(msg);
@@ -191,22 +181,19 @@ function Dashboard() {
         {!profile ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">جاري التحميل...</div>
         ) : tab === "pages" ? (
-          <div className="flex h-full flex-col gap-3">
-            <div className="min-h-0 flex-1">
-              <PagesPanel
-                userId={user.id}
-                profile={profile}
-                pages={pages}
-                tokens={tokens}
-                tokensLoading={tokensLoading}
-                tokensError={tokensError}
-                onSaveToken={saveToken}
-                selectedPageId={search.pg}
-                onSelectPage={(id) => setSearch({ pg: id })}
-                log={log}
-              />
-            </div>
-            <ActivityLog entries={entries} className="h-28 shrink-0 rounded-xl border border-border" />
+          <div className="h-full min-h-0">
+            <PagesPanel
+              userId={user.id}
+              profile={profile}
+              pages={pages}
+              tokens={tokens}
+              tokensLoading={tokensLoading}
+              tokensError={tokensError}
+              onSaveToken={saveToken}
+              selectedPageId={search.pg}
+              onSelectPage={(id) => setSearch({ pg: id })}
+              log={log}
+            />
           </div>
         ) : (
           <SendPanel

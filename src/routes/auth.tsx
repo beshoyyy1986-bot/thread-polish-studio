@@ -14,6 +14,8 @@ export const Route = createFileRoute("/auth")({
       { name: "description", content: "سجّل الدخول لإدارة صفحاتك وجلسات الإرسال." },
       { property: "og:title", content: "تسجيل الدخول — FBBlaster Pro" },
       { property: "og:description", content: "سجّل الدخول لإدارة صفحاتك وجلسات الإرسال." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   beforeLoad: async () => {
@@ -50,14 +52,15 @@ function AuthPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    const cleanEmail = email.trim();
     try {
       if (mode === "in") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
         if (error) throw error;
         navigate({ to: "/dashboard", replace: true });
       } else {
         const { data, error } = await supabase.auth.signUp({
-          email,
+          email: cleanEmail,
           password,
           options: { emailRedirectTo: window.location.origin },
         });
@@ -85,11 +88,11 @@ function AuthPage() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="email">البريد الإلكتروني</Label>
-          <Input id="email" type="email" dir="ltr" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input id="email" type="email" dir="ltr" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="password">كلمة المرور</Label>
-          <Input id="password" type="password" dir="ltr" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <Input id="password" type="password" dir="ltr" autoComplete={mode === "in" ? "current-password" : "new-password"} required value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
         <Button type="submit" className="w-full" disabled={busy}>
           {busy ? "..." : mode === "in" ? "دخول" : "إنشاء حساب"}

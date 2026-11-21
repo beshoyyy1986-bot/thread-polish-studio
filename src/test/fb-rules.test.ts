@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { conversationUrl, extractCustomer, parseCustomerFile, uniqueByConversation } from "@/lib/customer";
 import { buildBotScript, SAVED_REPLY_MARKER } from "@/lib/bot-script";
 import { normalizeCdpAddress } from "@/lib/cdp.server";
+import { browserIdFromAddress } from "@/lib/cloudbrowser.server";
 import { parseCookies } from "@/lib/cookies";
 
 describe("customer identity", () => {
@@ -53,6 +54,10 @@ describe("sending", () => {
     expect(normalizeCdpAddress("ws://browser.cloudbrowser.ai/68/devtools/browser/abc")).toBe(
       "wss://browser.cloudbrowser.ai/68/devtools/browser/abc",
     );
+  });
+
+  it("uses the worker channel in the remote desktop URL, not the CDP browser UUID", () => {
+    expect(browserIdFromAddress("ws://browser.cloudbrowser.ai/9/devtools/browser/cef5f472-4378-4557-b610-9ee3488c883b")).toBe("9");
   });
 
   it("rejects cookies that cannot log in (missing c_user or xs)", () => {

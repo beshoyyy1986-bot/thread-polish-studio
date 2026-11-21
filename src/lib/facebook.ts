@@ -41,7 +41,7 @@ export type ConvBatch = { data: any[]; after: string | null; done: boolean };
 
 /** One page of conversations. Only identity fields — message counts are irrelevant to the tool. */
 export async function getConversationBatch(page: FbPage, after: string | null, fields = "id,participants"): Promise<ConvBatch> {
-  let path = `/${page.id}/conversations?platform=messenger&fields=${fields}&limit=100`;
+  let path = `/${page.id}/conversations?platform=messenger&fields=${fields}&limit=500`;
   if (after) path += `&after=${encodeURIComponent(after)}`;
   const d = await graphFetch(withToken(path, page.access_token));
   const next: string | null = d.paging?.next ?? null;
@@ -53,14 +53,18 @@ export async function getConversationBatch(page: FbPage, after: string | null, f
  * Real number of conversations: walks every page of ids (Facebook usually does not return a total
  * for this edge, so counting is the only reliable way).
  */
-export async function countConversations(page: FbPage, onProgress: (n: number) => void, shouldStop: () => boolean) {
+export async function countConversations(
+  page: FbPage,
+  onProgress: (n: number) => void | Promise<void>,
+  shouldStop: () => boolean,
+) {
   const ids = new Set<string>();
   let after: string | null = null;
   for (;;) {
     if (shouldStop()) return { count: ids.size, complete: false };
     const b = await getConversationBatch(page, after, "id");
     b.data.forEach((c: any) => c.id && ids.add(c.id));
-    onProgress(ids.size);
+    await onProgress(ids.size);
     if (b.done) return { count: ids.size, complete: true };
     after = b.after;
     await sleep(150);

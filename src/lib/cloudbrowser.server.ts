@@ -74,6 +74,7 @@ export async function closeBrowserVerified(address: string): Promise<{ closed: b
 }
 
 export function browserIdFromAddress(address: string): string | null {
-  const m = address.match(/\/browser\/([a-f0-9-]+)/i);
+  // Remote desktop uses the worker channel (/9), not the CDP browser UUID.
+  const m = address.match(/\.ai\/([^/]+)\/devtools(?:\/|$)/i);
   return m?.[1] ?? null;
 }

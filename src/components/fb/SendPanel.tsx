@@ -68,6 +68,8 @@ export function SendPanel(props: {
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState({ ok: 0, err: 0, done: 0, total: 0 });
   const [current, setCurrent] = useState<Record<string, string>>({});
+  const [remoteViews, setRemoteViews] = useState<Record<string, string>>({});
+  const [viewLoading, setViewLoading] = useState<string | null>(null);
   const stopRef = useRef(false);
 
   const refresh = () => {
@@ -236,15 +238,27 @@ export function SendPanel(props: {
     refresh();
   }
 
-  async function view(s: Session) {
-    const w = window.open("about:blank", "_blank");
+  async function view(s: Session, separateTab = false) {
+    const w = separateTab ? window.open("about:blank", "_blank") : null;
+    if (w) w.opener = null;
+    setViewLoading(s.id);
     try {
-      const { url } = await viewFn({ data: { sessionId: s.id } });
+      const url = remoteViews[s.id] ?? (await viewFn({ data: { sessionId: s.id } })).url;
+      setRemoteViews((views) => ({ ...views, [s.id]: url }));
       if (w) w.location.href = url;
     } catch (e) {
       w?.close();
       toast.error(errText(e));
+    } finally {
+      setViewLoading(null);
     }
+  }
+
+  function hideView(sessionId: string) {
+    setRemoteViews((views) => {
+      const { [sessionId]: _, ...rest } = views;
+      return rest;
+    });
   }
 
   return (
@@ -349,8 +363,21 @@ export function SendPanel(props: {
                 </div>
                 {current[s.id] && <div className="mt-2 truncate text-xs text-primary">▶ {current[s.id]}</div>}
                 {s.last_error && <div className="mt-2 text-[11px] text-warning">{s.last_error}</div>}
+                {remoteViews[s.id] && (
+                  <div className="mt-3 overflow-hidden rounded-md border border-border bg-background">
+                    <iframe
+                      src={remoteViews[s.id]}
+                      title={`العرض المباشر ${s.label}`}
+                      className="aspect-video w-full"
+                      allow="clipboard-read; clipboard-write"
+                    />
+                  </div>
+                )}
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" variant="soft" onClick={() => view(s)}>🖥️ عرض</Button>
+                  <Button size="sm" variant="soft" disabled={viewLoading === s.id} onClick={() => remoteViews[s.id] ? hideView(s.id) : view(s)}>
+                    {viewLoading === s.id ? "جاري التشغيل..." : remoteViews[s.id] ? "إخفاء العرض" : "🖥️ عرض هنا"}
+                  </Button>
+                  <Button size="sm" variant="soft" disabled={viewLoading === s.id} onClick={() => view(s, true)}>↗ تكبير في تاب</Button>
                   {s.status !== "open" && s.status !== "close_failed" && (
                     <Button size="sm" variant="soft" onClick={() => reattach(s)}>🔗 اتصال</Button>
                   )}

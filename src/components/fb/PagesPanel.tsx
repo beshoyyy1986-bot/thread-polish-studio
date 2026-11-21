@@ -49,20 +49,44 @@ export function PagesPanel(props: {
   const refreshPages = () => qc.invalidateQueries({ queryKey: ["pages", profile.id] });
 
   async function runCount(row: PageRow) {
+    if (countingBusy.current) {
+      toast.error("في عدّ شغال بالفعل — اقفه الأول من زرار إيقاف وحفظ");
+      return;
+    }
     const page = tokens.get(row.page_id);
-    if (!page) return;
+    if (!page) {
+      toast.error("بيانات الصفحة لم تُحمّل بعد — تأكد من التوكن");
+      return;
+    }
+    countingBusy.current = true;
+    countStop.current = false;
     setCounting((c) => ({ ...c, [row.page_id]: 0 }));
     try {
-      const r = await countConversations(page, (n) => setCounting((c) => ({ ...c, [row.page_id]: n })), () => countStop.current);
-      await supabase
+      const r = await countConversations(
+        page,
+        async (n) => {
+          setCounting((c) => ({ ...c, [row.page_id]: n }));
+          // Save every 500-result batch so stopping, an error, or a refresh never loses the count.
+          const { error } = await supabase
+            .from("fb_pages")
+            .update({ conversation_count: n, count_complete: false, counted_at: new Date().toISOString() })
+            .eq("profile_id", profile.id)
+            .eq("page_id", row.page_id);
+          if (error) throw error;
+        },
+        () => countStop.current,
+      );
+      const { error } = await supabase
         .from("fb_pages")
         .update({ conversation_count: r.count, count_complete: r.complete, counted_at: new Date().toISOString() })
         .eq("profile_id", profile.id)
         .eq("page_id", row.page_id);
-      log(`💬 "${row.name}": ${fmt(r.count)} محادثة${r.complete ? "" : " (العد توقف قبل النهاية)"}`, r.complete ? "ok" : "warn");
+      if (error) throw error;
+      log(`💬 "${row.name}": ${fmt(r.count)} محادثة${r.complete ? "" : " (تم إيقاف العد وحفظ النتيجة)"}`, r.complete ? "ok" : "warn");
     } catch (e) {
       log(`⚠️ "${row.name}": تعذر عدّ المحادثات — ${e instanceof Error ? e.message : e}`, "warn");
     } finally {
+      countingBusy.current = false;
       setCounting((c) => {
         const { [row.page_id]: _, ...rest } = c;
         return rest;
@@ -70,23 +94,6 @@ export function PagesPanel(props: {
       refreshPages();
     }
   }
-
-  // Count pages that were never counted, one at a time to stay within Facebook's limits.
-  useEffect(() => {
-    if (!tokens.size || countingBusy.current) return;
-    const todo = pages.filter((p) => p.conversation_count == null && tokens.has(p.page_id));
-    if (!todo.length) return;
-    countingBusy.current = true;
-    countStop.current = false;
-    (async () => {
-      for (const p of todo) {
-        if (countStop.current) break;
-        await runCount(p);
-      }
-      countingBusy.current = false;
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokens, pages.length]);
 
   useEffect(() => () => {
     countStop.current = true;
@@ -185,6 +192,7 @@ export function PagesPanel(props: {
             extracting={extract?.pageId === selected.page_id ? extract.n : undefined}
             anyExtract={!!extract}
             onCount={() => runCount(selected)}
+            onStopCount={() => (countStop.current = true)}
             onExtract={(fresh) => runExtraction(selected, fresh)}
             onStop={() => (extractStop.current = true)}
             onExport={(t) => exportData(selected, t)}
@@ -204,19 +212,19 @@ export function PagesPanel(props: {
             <span className="text-3xl">🔑</span>أدخل التوكن واضغط "حفظ وجلب الصفحات"
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid content-start gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {pages.map((p) => (
               <button
                 key={p.page_id}
                 onClick={() => props.onSelectPage(p.page_id)}
                 className={cn(
-                  "rounded-xl border bg-card p-4 text-right transition hover:border-primary/60",
+                  "rounded-lg border bg-card p-2.5 text-right transition hover:border-primary/60",
                   p.page_id === selectedPageId ? "border-primary shadow-glow" : "border-border",
                 )}
               >
-                <div className="mb-1 truncate font-semibold">{p.name}</div>
-                <div className="mb-2 text-[11px] text-muted-foreground" dir="ltr">ID: {p.page_id}</div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="mb-0.5 truncate text-sm font-semibold">{p.name}</div>
+                <div className="mb-1.5 text-[10px] text-muted-foreground" dir="ltr">ID: {p.page_id}</div>
+                <div className="flex flex-wrap gap-1 [&>div]:px-2 [&>div]:py-0 [&>div]:text-[11px]">
                   <ConversationBadge row={p} counting={counting[p.page_id]} />
                   <Badge variant="muted">👥 {fmt(p.fan_count)} متابع</Badge>
                   {p.extracted_count > 0 && <Badge variant="info">📋 {fmt(p.extracted_count)} مستخرج</Badge>}
@@ -256,6 +264,7 @@ function SelectedPage(p: {
   extracting?: number | undefined;
   anyExtract: boolean;
   onCount: () => void;
+  onStopCount: () => void;
   onExtract: (fresh: boolean) => void;
   onStop: () => void;
   onExport: (t: "json" | "csv") => void;
@@ -293,9 +302,15 @@ function SelectedPage(p: {
             </Button>
           </div>
         )}
-        <Button variant="soft" className="w-full" disabled={!p.hasToken || p.counting !== undefined} onClick={p.onCount}>
-          {p.counting !== undefined ? `⏳ جاري العد ${fmt(p.counting)}…` : "🔢 إعادة عدّ المحادثات"}
-        </Button>
+        {p.counting !== undefined ? (
+          <Button variant="soft-destructive" className="w-full" onClick={p.onStopCount}>
+            ⏹ إيقاف وحفظ العد ({fmt(p.counting)})
+          </Button>
+        ) : (
+          <Button variant="soft" className="w-full" disabled={!p.hasToken} onClick={p.onCount}>
+            🔢 {row.conversation_count == null ? "عدّ المحادثات" : "إعادة عدّ المحادثات"}
+          </Button>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <Button variant="success" onClick={() => p.onExport("json")}>↓ JSON</Button>
           <Button variant="soft" onClick={() => p.onExport("csv")}>↓ CSV</Button>

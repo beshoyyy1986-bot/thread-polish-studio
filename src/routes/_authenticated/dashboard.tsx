@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { countConversations, getPages, type FbPage } from "@/lib/facebook";
 import { pagesQuery, profilesQuery } from "@/lib/fb-store";
-import { whoOwns } from "@/lib/fb.functions";
+import { closeSession, whoOwns } from "@/lib/fb.functions";
 import { PagesPanel } from "@/components/fb/PagesPanel";
 import { SendPanel } from "@/components/fb/SendPanel";
 import { useLog } from "@/components/fb/use-log";
@@ -57,6 +57,7 @@ function Dashboard() {
   const qc = useQueryClient();
   const { entries, log } = useLog();
   const ownerFn = useServerFn(whoOwns);
+  const closeSessionFn = useServerFn(closeSession);
   const [allowed, setAllowed] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -92,32 +93,34 @@ function Dashboard() {
   const [countProgress, setCountProgress] = useState("");
 
   const loadPages = useCallback(
-    async (token: string, profileId: string) => {
+    async (token: string, profileId: string): Promise<FbPage[] | null> => {
       setTokensLoading(true);
       setTokensError(null);
       try {
         const list = await getPages(token);
-        setTokens(new Map(list.map((p) => [p.id, p])));
+        setTokens(new Map(list.map((page) => [page.id, page])));
         if (list.length) {
           const { error } = await supabase.from("fb_pages").upsert(
-            list.map((p) => ({
+            list.map((page) => ({
               profile_id: profileId,
-              page_id: p.id,
+              page_id: page.id,
               user_id: user.id,
-              name: p.name,
-              fan_count: p.fan_count ?? 0,
+              name: page.name,
+              fan_count: page.fan_count ?? 0,
               updated_at: new Date().toISOString(),
             })),
             { onConflict: "profile_id,page_id" },
           );
           if (error) throw error;
         }
-        qc.invalidateQueries({ queryKey: ["pages", profileId] });
+        await qc.invalidateQueries({ queryKey: ["pages", profileId] });
         log(`✅ تم جلب ${list.length} صفحة`, "ok");
+        return list;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setTokensError(msg);
         log("❌ " + msg, "err");
+        return null;
       } finally {
         setTokensLoading(false);
       }
@@ -132,26 +135,15 @@ function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
 
-  async function saveToken(token: string) {
-    if (!profile) return;
-    await supabase.from("fb_profiles").update({ access_token: token }).eq("id", profile.id);
-    qc.invalidateQueries({ queryKey: ["profiles"] });
-    await loadPages(token, profile.id);
-  }
-
-  async function countAllConversations() {
-    if (!profile || countingAll) return;
-    const availablePages = pages.filter((page) => tokens.has(page.page_id));
+  async function countPageConversations(profileId: string, availablePages: FbPage[]) {
     if (!availablePages.length) {
-      toast.error("احفظ توكن فيسبوك صالحًا وجلب الصفحات أولًا");
+      toast.error("لم يتم العثور على صفحات متاحة لهذا التوكن");
       return;
     }
     setCountingAll(true);
     try {
-      for (const [index, row] of availablePages.entries()) {
-        const page = tokens.get(row.page_id);
-        if (!page) continue;
-        setCountProgress(`${index + 1}/${availablePages.length} — ${row.name}`);
+      for (const [index, page] of availablePages.entries()) {
+        setCountProgress(`${index + 1}/${availablePages.length} — ${page.name}`);
         try {
           const result = await countConversations(
             page,
@@ -163,8 +155,8 @@ function Dashboard() {
                   count_complete: false,
                   counted_at: new Date().toISOString(),
                 })
-                .eq("profile_id", profile.id)
-                .eq("page_id", row.page_id);
+                .eq("profile_id", profileId)
+                .eq("page_id", page.id);
               if (error) throw error;
             },
             () => false,
@@ -176,22 +168,50 @@ function Dashboard() {
               count_complete: result.complete,
               counted_at: new Date().toISOString(),
             })
-            .eq("profile_id", profile.id)
-            .eq("page_id", row.page_id);
+            .eq("profile_id", profileId)
+            .eq("page_id", page.id);
           if (error) throw error;
-          log(`💬 ${row.name}: ${result.count.toLocaleString("en-US")} محادثة`, "ok");
+          log(`💬 ${page.name}: ${result.count.toLocaleString("en-US")} محادثة`, "ok");
         } catch (error) {
           log(
-            `⚠️ تعذر عدّ محادثات ${row.name}: ${error instanceof Error ? error.message : String(error)}`,
+            `⚠️ تعذر عدّ محادثات ${page.name}: ${error instanceof Error ? error.message : String(error)}`,
             "warn",
           );
         }
-        await qc.invalidateQueries({ queryKey: ["pages", profile.id] });
+        await qc.invalidateQueries({ queryKey: ["pages", profileId] });
       }
     } finally {
       setCountingAll(false);
       setCountProgress("");
     }
+  }
+
+  async function refreshPagesAndCount(token: string, profileId: string) {
+    if (countingAll) return;
+    const list = await loadPages(token, profileId);
+    if (list) await countPageConversations(profileId, list);
+  }
+
+  async function saveToken(token: string) {
+    if (!profile) return;
+    const { error } = await supabase
+      .from("fb_profiles")
+      .update({ access_token: token })
+      .eq("id", profile.id);
+    if (error) {
+      toast.error("تعذر حفظ التوكن");
+      return;
+    }
+    await qc.invalidateQueries({ queryKey: ["profiles"] });
+    await refreshPagesAndCount(token, profile.id);
+  }
+
+  async function countAllConversations() {
+    if (!profile?.access_token) {
+      toast.error("احفظ توكن فيسبوك صالحًا أولًا");
+      return;
+    }
+    await refreshPagesAndCount(profile.access_token, profile.id);
   }
 
   async function addProfile() {
@@ -207,14 +227,61 @@ function Dashboard() {
   }
 
   async function deleteProfile() {
-    if (!profile || (profiles?.length ?? 0) <= 1) {
-      toast.error("لا يمكن حذف آخر بروفايل");
+    if (!profile) return;
+    const isLastProfile = (profiles?.length ?? 0) <= 1;
+    const action = isLastProfile ? "حذف وإعادة ضبط" : "حذف";
+    if (
+      !confirm(
+        `${action} "${profile.name}" نهائيًا؟ سيتم إغلاق جلساته السحابية وحذف الصفحات والعملاء والإحصاءات المحفوظة المرتبطة به. ${isLastProfile ? "سيُنشأ بروفايل فارغ جديد لإعادة ضبط الأداة." : ""}`,
+      )
+    )
+      return;
+
+    const { data: linkedSessions, error: sessionReadError } = await supabase
+      .from("cloud_sessions")
+      .select("id,status")
+      .eq("profile_id", profile.id);
+    if (sessionReadError) {
+      toast.error("تعذر قراءة جلسات البروفايل؛ لم يتم حذفه");
       return;
     }
-    if (!confirm(`حذف "${profile.name}" وكل بياناته (الصفحات والعملاء المستخرجين)؟`)) return;
-    await supabase.from("fb_profiles").delete().eq("id", profile.id);
-    await qc.invalidateQueries({ queryKey: ["profiles"] });
+
+    for (const session of linkedSessions ?? []) {
+      if (!["opening", "open", "lost", "close_failed"].includes(session.status)) continue;
+      try {
+        const result = await closeSessionFn({ data: { sessionId: session.id } });
+        if (!result.closed) throw new Error(result.detail);
+      } catch (error) {
+        toast.error(
+          `تعذر إغلاق جلسة سحابية؛ لم يتم حذف البروفايل. ${error instanceof Error ? error.message : ""}`,
+        );
+        return;
+      }
+    }
+
+    const { error: sessionDeleteError } = await supabase
+      .from("cloud_sessions")
+      .delete()
+      .eq("profile_id", profile.id);
+    if (sessionDeleteError) {
+      toast.error("تعذر حذف جلسات البروفايل؛ لم يتم حذفه");
+      return;
+    }
+
+    const { error } = await supabase.from("fb_profiles").delete().eq("id", profile.id);
+    if (error) {
+      toast.error("تعذر حذف البروفايل");
+      return;
+    }
+    creating.current = false;
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["profiles"] }),
+      qc.invalidateQueries({ queryKey: ["pages"] }),
+      qc.invalidateQueries({ queryKey: ["stats"] }),
+    ]);
+    setTokens(new Map());
     setSearch({ p: undefined, pg: undefined });
+    toast.success(isLastProfile ? "تمت إعادة ضبط الأداة" : "تم حذف البروفايل وبياناته");
   }
 
   async function signOut() {
@@ -266,9 +333,9 @@ function Dashboard() {
             size="sm"
             variant="soft"
             onClick={() => void countAllConversations()}
-            disabled={countingAll || !pages.length}
+            disabled={countingAll || tokensLoading || !profile?.access_token}
           >
-            {countingAll ? `⏳ ${countProgress || "جاري العد"}` : "🔄 تحديث عدد المحادثات"}
+            {countingAll ? `⏳ ${countProgress || "جاري العد"}` : "🔄 تحديث الصفحات والمحادثات"}
           </Button>
         </div>
         <div className="flex items-center gap-2">
@@ -291,8 +358,9 @@ function Dashboard() {
             variant="soft-destructive"
             onClick={deleteProfile}
             aria-label="حذف البروفايل"
+            title="حذف البروفايل أو إعادة ضبط الأداة"
           >
-            ✕
+            حذف البروفايل
           </Button>
           <Button size="sm" variant="ghost" onClick={signOut}>
             خروج

@@ -5,22 +5,39 @@ const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80001, 80006]);
 
 export type FbPage = { id: string; name: string; fan_count?: number; access_token: string };
 
-export async function graphFetch(url: string, attempt = 0): Promise<any> {
-  let d: any;
+type GraphResponse<T> = {
+  [key: string]: unknown;
+  data?: T[];
+  paging?: { next?: string | null; cursors?: { after?: string | null } };
+  error?: { code?: number; is_transient?: boolean; message?: string };
+};
+type Conversation = {
+  id?: string;
+  participants?: { data?: { id?: string; name?: string }[] };
+};
+
+export async function graphFetch<T = Record<string, unknown>>(
+  url: string,
+  attempt = 0,
+): Promise<GraphResponse<T>> {
+  let response: GraphResponse<T>;
   try {
-    d = await (await fetch(url)).json();
-  } catch (e) {
-    if (attempt < 4) return sleep(2000 * (attempt + 1)).then(() => graphFetch(url, attempt + 1));
-    throw e;
+    response = (await (await fetch(url)).json()) as GraphResponse<T>;
+  } catch (error) {
+    if (attempt < 4) return sleep(2000 * (attempt + 1)).then(() => graphFetch<T>(url, attempt + 1));
+    throw error;
   }
-  if (d?.error) {
-    if ((RATE_LIMIT_CODES.has(d.error.code) || d.error.is_transient) && attempt < 5) {
+  if (response.error) {
+    if (
+      (RATE_LIMIT_CODES.has(response.error.code ?? -1) || response.error.is_transient) &&
+      attempt < 5
+    ) {
       await sleep(5000 * (attempt + 1));
-      return graphFetch(url, attempt + 1);
+      return graphFetch<T>(url, attempt + 1);
     }
-    throw new Error(d.error.message || "خطأ من فيسبوك");
+    throw new Error(response.error.message || "خطأ من فيسبوك");
   }
-  return d;
+  return response;
 }
 
 export const withToken = (path: string, token: string) =>
@@ -28,25 +45,60 @@ export const withToken = (path: string, token: string) =>
 
 export async function getPages(userToken: string): Promise<FbPage[]> {
   const all: FbPage[] = [];
-  let url: string | null = withToken("/me/accounts?fields=name,id,fan_count,access_token&limit=100", userToken);
+  let url: string | null = withToken(
+    "/me/accounts?fields=name,id,fan_count,access_token&limit=100",
+    userToken,
+  );
   while (url) {
-    const d = await graphFetch(url);
+    const d: GraphResponse<FbPage> = await graphFetch<FbPage>(url);
     all.push(...(d.data ?? []));
     url = d.paging?.next ?? null;
   }
   return all;
 }
 
-export type ConvBatch = { data: any[]; after: string | null; done: boolean };
+export type ConvBatch = {
+  data: Conversation[];
+  after: string | null;
+  next: string | null;
+  done: boolean;
+};
+
+function toConversationBatch(response: GraphResponse<Conversation>): ConvBatch {
+  const data = response.data ?? [];
+  const next: string | null = response.paging?.next ?? null;
+  return {
+    data,
+    after: response.paging?.cursors?.after ?? null,
+    next,
+    done: !next || data.length === 0,
+  };
+}
 
 /** One page of conversations. Only identity fields — message counts are irrelevant to the tool. */
-export async function getConversationBatch(page: FbPage, after: string | null, fields = "id,participants"): Promise<ConvBatch> {
+export async function getConversationBatch(
+  page: FbPage,
+  after: string | null,
+  fields = "id,participants",
+): Promise<ConvBatch> {
   let path = `/${page.id}/conversations?platform=messenger&fields=${fields}&limit=500`;
   if (after) path += `&after=${encodeURIComponent(after)}`;
-  const d = await graphFetch(withToken(path, page.access_token));
-  const next: string | null = d.paging?.next ?? null;
-  const cursor: string | null = d.paging?.cursors?.after ?? null;
-  return { data: d.data ?? [], after: cursor, done: !next || !cursor || !(d.data ?? []).length };
+  return toConversationBatch(await graphFetch<Conversation>(withToken(path, page.access_token)));
+}
+
+async function getConversationBatchFromNext(
+  page: FbPage,
+  next: string,
+  fields = "id",
+): Promise<ConvBatch> {
+  const url = new URL(next);
+  const expectedPath = `/v19.0/${page.id}/conversations`;
+  if (url.origin !== new URL(FB_BASE).origin || url.pathname !== expectedPath) {
+    throw new Error("رابط ترقيم صفحات غير صالح من Facebook");
+  }
+  url.searchParams.set("fields", fields);
+  url.searchParams.set("limit", "500");
+  return toConversationBatch(await graphFetch<Conversation>(url.toString()));
 }
 
 /**
@@ -59,26 +111,36 @@ export async function countConversations(
   shouldStop: () => boolean,
 ) {
   const ids = new Set<string>();
-  let after: string | null = null;
+  let next: string | null = null;
+  let firstBatch = true;
   for (;;) {
     if (shouldStop()) return { count: ids.size, complete: false };
-    const b = await getConversationBatch(page, after, "id");
-    b.data.forEach((c: any) => c.id && ids.add(c.id));
+    const batch: ConvBatch = firstBatch
+      ? await getConversationBatch(page, null, "id")
+      : await getConversationBatchFromNext(page, next!, "id");
+    firstBatch = false;
+    batch.data.forEach((conversation) => conversation.id && ids.add(conversation.id));
     await onProgress(ids.size);
-    if (b.done) return { count: ids.size, complete: true };
-    after = b.after;
+    if (batch.done) return { count: ids.size, complete: true };
+    next = batch.next;
     await sleep(150);
   }
 }
 
 /** Facebook has no real creation date for pages; the oldest post is the closest estimate. */
 export async function getOldestPostDate(page: FbPage, maxBatches = 25) {
-  let url: string | null = withToken(`/${page.id}/posts?fields=created_time&limit=100`, page.access_token);
+  let url: string | null = withToken(
+    `/${page.id}/posts?fields=created_time&limit=100`,
+    page.access_token,
+  );
   let last: string | null = null;
   let batches = 0;
   while (url) {
-    const d = await graphFetch(url);
-    if (d.data?.length) last = d.data[d.data.length - 1].created_time;
+    const d: GraphResponse<{ created_time: string }> = await graphFetch<{ created_time: string }>(
+      url,
+    );
+    const latestPost = d.data?.at(-1);
+    if (latestPost) last = latestPost.created_time;
     url = d.paging?.next ?? null;
     if (++batches >= maxBatches) return { date: last, approx: !!url };
     await sleep(150);

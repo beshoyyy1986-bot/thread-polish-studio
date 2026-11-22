@@ -19,6 +19,11 @@ export const Route = createFileRoute("/auth")({
     ],
   }),
   beforeLoad: async () => {
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mode") === "reset"
+    )
+      return;
     const { data } = await supabase.auth.getSession();
     if (data.session) throw redirect({ to: "/dashboard" });
   },
@@ -44,7 +49,12 @@ function authErrorMessage(err: unknown): string {
 
 function AuthPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const [mode, setMode] = useState<"in" | "up" | "request-reset" | "reset">(() => {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mode") === "reset"
+      ? "reset"
+      : "in";
+  });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,7 +64,21 @@ function AuthPage() {
     setBusy(true);
     const cleanEmail = email.trim();
     try {
-      if (mode === "in") {
+      if (mode === "request-reset") {
+        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+          redirectTo: `${window.location.origin}/auth?mode=reset`,
+        });
+        if (error) throw error;
+        toast.success("لو البريد مسجل، هيوصلك رابط تغيير كلمة المرور.");
+      } else if (mode === "reset") {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+        toast.success("تم تغيير كلمة المرور. يمكنك تسجيل الدخول الآن.");
+        await supabase.auth.signOut();
+        window.history.replaceState({}, "", "/auth");
+        setPassword("");
+        setMode("in");
+      } else if (mode === "in") {
         const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
         if (error) throw error;
         navigate({ to: "/dashboard", replace: true });
@@ -75,31 +99,98 @@ function AuthPage() {
     }
   }
 
+  const isPasswordForm = mode === "in" || mode === "up" || mode === "reset";
+  const title =
+    mode === "request-reset"
+      ? "استعادة كلمة المرور"
+      : mode === "reset"
+        ? "اختيار كلمة مرور جديدة"
+        : mode === "in"
+          ? "سجّل الدخول للمتابعة"
+          : "إنشاء حساب جديد";
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-5 rounded-2xl border border-border bg-card p-7 shadow-glow">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm space-y-5 rounded-2xl border border-border bg-card p-7 shadow-glow"
+      >
         <div className="space-y-1 text-center">
           <h1 className="text-2xl font-bold tracking-tight">
-            <span className="text-brand">FB</span>Blaster <span className="text-muted-foreground text-base">Pro</span>
+            <span className="text-brand">FB</span>Blaster{" "}
+            <span className="text-muted-foreground text-base">Pro</span>
           </h1>
-          <p className="text-sm text-muted-foreground">
-            {mode === "in" ? "سجّل الدخول للمتابعة" : "إنشاء حساب جديد"}
-          </p>
+          <p className="text-sm text-muted-foreground">{title}</p>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="email">البريد الإلكتروني</Label>
-          <Input id="email" type="email" dir="ltr" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="password">كلمة المرور</Label>
-          <Input id="password" type="password" dir="ltr" autoComplete={mode === "in" ? "current-password" : "new-password"} required value={password} onChange={(e) => setPassword(e.target.value)} />
-        </div>
+        {mode !== "reset" && (
+          <div className="space-y-2">
+            <Label htmlFor="email">البريد الإلكتروني</Label>
+            <Input
+              id="email"
+              type="email"
+              dir="ltr"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+        )}
+        {isPasswordForm && (
+          <div className="space-y-2">
+            <Label htmlFor="password">
+              {mode === "in" ? "كلمة المرور" : "كلمة المرور الجديدة"}
+            </Label>
+            <Input
+              id="password"
+              type="password"
+              dir="ltr"
+              autoComplete={mode === "in" ? "current-password" : "new-password"}
+              minLength={6}
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+        )}
         <Button type="submit" className="w-full" disabled={busy}>
-          {busy ? "..." : mode === "in" ? "دخول" : "إنشاء حساب"}
+          {busy
+            ? "..."
+            : mode === "in"
+              ? "دخول"
+              : mode === "up"
+                ? "إنشاء حساب"
+                : mode === "request-reset"
+                  ? "إرسال رابط التغيير"
+                  : "حفظ كلمة المرور الجديدة"}
         </Button>
-        <button type="button" className="w-full text-center text-sm text-muted-foreground hover:text-foreground" onClick={() => setMode(mode === "in" ? "up" : "in")}>
-          {mode === "in" ? "أول مرة؟ أنشئ حساباً" : "عندي حساب بالفعل"}
-        </button>
+        {mode === "in" && (
+          <button
+            type="button"
+            className="w-full text-center text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setMode("request-reset")}
+          >
+            نسيت كلمة المرور؟
+          </button>
+        )}
+        {(mode === "in" || mode === "up") && (
+          <button
+            type="button"
+            className="w-full text-center text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setMode(mode === "in" ? "up" : "in")}
+          >
+            {mode === "in" ? "أول مرة؟ أنشئ حساباً" : "عندي حساب بالفعل"}
+          </button>
+        )}
+        {(mode === "request-reset" || mode === "reset") && (
+          <button
+            type="button"
+            className="w-full text-center text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setMode("in")}
+          >
+            العودة لتسجيل الدخول
+          </button>
+        )}
       </form>
     </div>
   );

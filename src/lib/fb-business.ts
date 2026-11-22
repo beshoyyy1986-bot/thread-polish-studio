@@ -102,7 +102,7 @@ async function graphAll(path: string, token: string, max = 50): Promise<any[]> {
   const out: any[] = [];
   let url: string | null = withToken(path, token);
   for (let i = 0; url && i < max; i++) {
-    const d = await graphFetch(url);
+    const d: Awaited<ReturnType<typeof graphFetch>> = await graphFetch(url);
     out.push(...(d.data ?? []));
     url = d.paging?.next ?? null;
   }
@@ -220,7 +220,8 @@ export async function getPageBusiness(page: FbPage): Promise<{ id: string; name:
     const d = await graphFetch(
       withToken(`/${page.id}?fields=business{id,name}`, page.access_token),
     );
-    return d.business ? { id: d.business.id, name: d.business.name } : null;
+    const business = d["business"] as { id: string; name: string } | undefined;
+    return business ? { id: business.id, name: business.name } : null;
   } catch {
     return null;
   }

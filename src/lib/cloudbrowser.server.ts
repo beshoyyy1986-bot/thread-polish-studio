@@ -46,7 +46,14 @@ export async function listBrowsers(): Promise<CbBrowser[] | null> {
 }
 
 export async function openBrowser(label: string) {
-  const r = await cbPost("/Browser/Open", { label, keepOpen: 0, headless: false, stealth: true });
+  const { EXTENSION_ZIP_B64 } = await import("@/lib/extension-zip.server");
+  const r = await cbPost("/Browser/Open", {
+    label,
+    keepOpen: 0,
+    headless: false,
+    stealth: true,
+    extensions: [EXTENSION_ZIP_B64],
+  });
   const address = typeof r.body["address"] === "string" ? r.body["address"] : null;
   if (r.httpStatus !== 200 || !address) {
     throw new Error(`فشل فتح المتصفح السحابي: ${r.networkError ?? JSON.stringify(r.body).slice(0, 300)}`);

@@ -325,7 +325,7 @@ function Dashboard() {
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {t === "pages" ? "📊 الصفحات والعملاء" : "🚀 الإرسال"}
+                {t === "pages" ? "📊 الصفحات والعملاء" : "🖥️ المتصفحات"}
               </button>
             ))}
           </nav>

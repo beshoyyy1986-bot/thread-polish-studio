@@ -39,3 +39,4 @@ use the editor.
 - Server function modules live in `src/lib/*.functions.ts`; `src/server/**` is blocked from client imports.
 - Page people are listed from `/roles` but only edited through the owning portfolio's `/{page}/assigned_users` (user token + business id); writes use POST with `method=delete` for removals. Why: Facebook rejects POST/DELETE on `/roles`, and the override avoids CORS preflight issues.
 - A portfolio counts as disabled when it has ad accounts and all are disabled. Why: Graph exposes no portfolio disabled flag to these tokens.
+- Every cloud browser opens with the extension in `/extension`, sent as a base64 zip from `src/lib/extension-zip.server.ts` (regenerate it after editing the extension). Why: the extension, not the app, does the messaging.

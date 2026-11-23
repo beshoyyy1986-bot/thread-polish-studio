@@ -24,6 +24,7 @@ import {
   syncSessions,
 } from "@/lib/fb.functions";
 import { Panel, Stat } from "./Panel";
+import { cn } from "@/lib/utils";
 import { ActivityLog } from "./ActivityLog";
 import type { LogEntry, Logger } from "./use-log";
 
@@ -415,7 +416,7 @@ export function SendPanel(props: {
           </Button>
         )}
         <Button variant="soft-destructive" onClick={closeAll} disabled={!sessions.length}>
-          ⏹ إيقاف الكل وإغلاق الجلسات
+          🗑 حذف كل الجلسات المفتوحة
         </Button>
       </aside>
 
@@ -463,7 +464,7 @@ export function SendPanel(props: {
           {sessions.map((s) => {
             const st = statusLabel[s.status] ?? { text: s.status, variant: "muted" as const };
             return (
-              <div key={s.id} className="rounded-lg border border-border bg-secondary/50 p-3">
+              <div key={s.id} className={cn("rounded-lg border border-border bg-secondary/50 p-3", remoteViews[s.id] && "col-span-full")}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium" dir="ltr">
@@ -486,7 +487,7 @@ export function SendPanel(props: {
                     <iframe
                       src={remoteViews[s.id]}
                       title={`العرض المباشر ${s.label}`}
-                      className="aspect-video w-full"
+                      className="h-[75vh] min-h-[480px] w-full"
                       allow="clipboard-read; clipboard-write"
                     />
                   </div>
@@ -518,7 +519,7 @@ export function SendPanel(props: {
                     </Button>
                   )}
                   <Button size="sm" variant="soft-destructive" onClick={() => close(s)}>
-                    إغلاق
+                    🗑 حذف الجلسة
                   </Button>
                 </div>
               </div>

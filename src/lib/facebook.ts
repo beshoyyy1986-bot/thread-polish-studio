@@ -30,9 +30,10 @@ export async function graphFetch<T = Record<string, unknown>>(
   if (response.error) {
     if (
       (RATE_LIMIT_CODES.has(response.error.code ?? -1) || response.error.is_transient) &&
-      attempt < 5
+      attempt < 8
     ) {
-      await sleep(5000 * (attempt + 1));
+      // App-level limits (#4/#17/#32) can last many minutes: back off up to ~1 min per retry.
+      await sleep(Math.min(60000, 5000 * 2 ** attempt));
       return graphFetch<T>(url, attempt + 1);
     }
     throw new Error(response.error.message || "خطأ من فيسبوك");
@@ -71,7 +72,7 @@ function toConversationBatch(response: GraphResponse<Conversation>): ConvBatch {
     data,
     after: response.paging?.cursors?.after ?? null,
     next,
-    done: !next || data.length === 0,
+    done: !next,
   };
 }
 
@@ -113,6 +114,7 @@ export async function countConversations(
   const ids = new Set<string>();
   let next: string | null = null;
   let firstBatch = true;
+  let emptyRuns = 0;
   for (;;) {
     if (shouldStop()) return { count: ids.size, complete: false };
     const batch: ConvBatch = firstBatch
@@ -121,7 +123,8 @@ export async function countConversations(
     firstBatch = false;
     batch.data.forEach((conversation) => conversation.id && ids.add(conversation.id));
     await onProgress(ids.size);
-    if (batch.done) return { count: ids.size, complete: true };
+    emptyRuns = batch.data.length ? 0 : emptyRuns + 1;
+    if (batch.done || emptyRuns >= 5) return { count: ids.size, complete: true };
     next = batch.next;
     await sleep(150);
   }

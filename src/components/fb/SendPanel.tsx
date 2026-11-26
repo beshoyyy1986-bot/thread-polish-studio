@@ -161,9 +161,15 @@ export function SendPanel(props: {
     if (w) w.opener = null;
     setViewLoading(s.id);
     try {
-      const url = remoteViews[s.id] ?? (await viewFn({ data: { sessionId: s.id } })).url;
-      setRemoteViews((views) => ({ ...views, [s.id]: url }));
-      if (w) w.location.href = url;
+      if (w) {
+        // The live screen accepts one viewer: drop the inline view and use a fresh link for the tab.
+        hideView(s.id);
+        const { url } = await viewFn({ data: { sessionId: s.id } });
+        w.location.href = url;
+      } else {
+        const url = remoteViews[s.id] ?? (await viewFn({ data: { sessionId: s.id } })).url;
+        setRemoteViews((views) => ({ ...views, [s.id]: url }));
+      }
     } catch (e) {
       w?.close();
       toast.error(errText(e));

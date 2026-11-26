@@ -957,6 +957,15 @@ function pickSavedReply(scope, wanted) {
     return null;
 }
 
+function findReplyAnywhere(beforeSet, wanted) {
+    if (!normalizeArabic(wanted)) return null;
+    const scopes = Array.from(document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]')).filter(isVisible);
+    const fresh = Array.from(document.querySelectorAll(PRESSABLE)).filter(p => isVisible(p) && !(beforeSet && beforeSet.has(p)));
+    if (fresh.length) { const a = commonAncestor(fresh); if (a) scopes.push(a); }
+    for (const sc of scopes) { const r = pickSavedReply(sc, wanted); if (r) return r; }
+    return null;
+}
+
 function listAvailableTitles(scope) {
     return Array.from(scope.querySelectorAll(PRESSABLE)).filter(isVisible)
         .map(firstLine).filter(Boolean).slice(0, 8);
@@ -1023,8 +1032,11 @@ async function insertSavedReply() {
         // انتظر ظهور القائمة وتحميل عناصرها (مع تمرير داخلي للبحث عن العنوان)
         let picked = null, scopeInfo = null, scrolls = 0;
         const t0 = Date.now();
-        while (Date.now() - t0 < 8000 && !isStopped()) {
+        while (Date.now() - t0 < 6000 && !isStopped()) {
             scopeInfo = getPopupScope(beforeSet);
+            // أول فتح: القائمة بتتحمّل متأخر فالنطاق المحسوب ممكن يكون عنصر تحميل غلط - دوّر في كل القوائم الظاهرة
+            if (!picked) picked = findReplyAnywhere(beforeSet, wanted);
+            if (picked) break;
             if (scopeInfo && scopeInfo.scope) {
                 picked = pickSavedReply(scopeInfo.scope, wanted);
                 if (picked) break;
@@ -1037,10 +1049,10 @@ async function insertSavedReply() {
                     continue;
                 }
             }
-            await sleep(250);
+            await sleep(150);
         }
 
-        if (!scopeInfo) {
+        if (!scopeInfo && !picked) {
             lastReason = 'popup_failed';
             addLog(`⚠️ قائمة الردود المحفوظة لم تظهر (محاولة ${attempt}/${ATTEMPTS})`, 'warning');
             continue;
